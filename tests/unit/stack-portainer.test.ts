@@ -18,6 +18,13 @@ describe("stack Portainer", () => {
     expect(stack).not.toContain("build:");
   });
 
+  it("declara as variáveis dentro de cada serviço que as recebe", () => {
+    expect(stack).not.toContain("x-runtime-env");
+    expect(stack).toContain("  app:\n    image:");
+    expect(stack).toContain("  worker:\n    image:");
+    expect(stack.match(/    environment:\n      NODE_ENV: production/g)).toHaveLength(2);
+  });
+
   it("deixa somente o app na rede pública e mantém o webhook interno", () => {
     expect(stack).toContain("      - network_public");
     expect(stack).toContain('WAHA_WEBHOOK_BASE_URL: "http://app:3000"');
