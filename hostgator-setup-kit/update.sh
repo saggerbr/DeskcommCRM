@@ -257,7 +257,7 @@ if ! dc pull; then
     c_ylw "  A do app veio; o que faltar é construído aqui (mais lento, mesmo resultado)."
   else
     c_ylw "⚠ Não consegui puxar a imagem do APP na versão ${VERSAO_ALVO}."
-    c_ylw "  Causas comuns: a versão ainda está publicando, ou o pacote está privado no GHCR."
+    c_ylw "  Causas comuns: a versão ainda está publicando, ou a imagem está privada no registry."
     c_ylw "  Vou tentar subir mesmo assim — se falhar, rode de novo em alguns minutos."
   fi
 fi

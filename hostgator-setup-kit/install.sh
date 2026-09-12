@@ -1510,7 +1510,7 @@ fi
 # o pull_policy das três imagens. A regra é medida, não estética: com `always` e
 # o registry sem responder para aquela referência, o `up -d` FALHA e o contêiner
 # não sobe, mesmo com a imagem já no disco. Numa tag imutável isso não protege
-# de nada — só amarra a subida do CRM à disponibilidade do GHCR. Numa tag móvel
+# de nada — só amarra a subida do CRM à disponibilidade do registry. Numa tag móvel
 # é o contrário: sem `always`, a versão nova nunca chega.
 # Olha só o último segmento do caminho: `registry.local:5000/x/y` tem ':' e NÃO
 # tem tag, e um `${APP_IMAGE##*:}` ingênuo devolveria "5000/x/y" como se fosse
@@ -2038,9 +2038,9 @@ step "Puxando a imagem e subindo os serviços"
 # A guarda existe porque dar `image:` a um serviço que era build-only mudou o
 # comportamento do `pull`: antes ele PULAVA o worker ("Skipped - No image to be
 # pulled"), agora FALHA a operação inteira se a referência não resolver. E há
-# três motivos reais para não resolver logo depois de um release: pacote novo no
-# GHCR nasce PRIVADO até alguém trocar a visibilidade na mão; a tag git existe
-# minutos antes das imagens; e o GHCR pode estar fora do ar.
+# três motivos reais para não resolver logo depois de um release: imagem nova
+# pode estar privada; a tag git existe minutos antes das imagens; e o registry
+# pode estar fora do ar.
 #
 # Sem esta guarda, uma instalação NOVA morria no passo 9 — com o banco já
 # provisionado e o .env já escrito. O `up -d` seguinte não precisa do pull: o

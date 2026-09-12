@@ -105,7 +105,7 @@ IMG_APP="$(imagem_do_servico app)"
 #
 #     `source`, `licenses` e `title` vêm do `LABEL` do Dockerfile, então uma
 #     imagem local os carrega também; `revision` (e `version`) vêm do
-#     docker/metadata-action, que só roda no CI.
+#     scripts/publicar-imagem-docker.sh, que só roda no CI.
 #
 #     A primeira versão deste detector decidia pelo NOME da imagem ("tem host,
 #     logo veio de registro") e só consultava os labels quando o nome não tinha

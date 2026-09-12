@@ -15,7 +15,7 @@ Ao mudar um invariante aqui, atualize os dois na mesma sessão.
 | saber se sua mudança precisa virar imagem publicada | §Os 8 invariantes, nº 1 |
 | escolher a tag que uma instalação de cliente consome | §Política de canais |
 | lançar uma versão | §Checklist de release |
-| entender por que o namespace é `melgarafael` e não uma org | o ADR |
+| entender o namespace `somamais` e a transição de registry | o ADR |
 
 ---
 
@@ -73,7 +73,7 @@ worker:
 
 # CERTO — imagem publicada; o build fica ao lado, como escape
 worker:
-  image: ${WORKER_IMAGE:-ghcr.io/melgarafael/deskcomm-worker:stable}
+  image: ${WORKER_IMAGE:-docker.io/somamais/deskcomm-worker:stable}
   build: { context: ., dockerfile: Dockerfile.worker }
 ```
 
@@ -95,6 +95,10 @@ worker:
 
 Imagem nossa só existe se saiu de `.github/workflows/publish-image.yml`. Ela carrega os labels
 OCI — no mínimo `source`, `revision`, `version`, `licenses` — e é construída para `linux/amd64`.
+
+O workflow chama `scripts/publicar-imagem-docker.sh`, que exige uma versão explícita e recusa
+`--publish` fora do CI. As credenciais do Docker Hub vivem exclusivamente nos secrets
+`DOCKERHUB_USERNAME` e `DOCKERHUB_TOKEN` do GitHub Actions; nunca no `.env` da VPS.
 
 - **Por quê:** duas razões distintas. **(a) Arquitetura:** um `docker build` num Mac ARM produz
   imagem que não roda na VPS amd64 do cliente, e a falha aparece só no `up -d` dele. **(b)
@@ -176,7 +180,7 @@ proibido — corrige-se com `X.Y.Z+1`. Só `latest`, `main`, `stable` e `X.Y` se
   vez de uma esperança. Se `1.2.1` puder ser reescrita, todo cliente "pinado" continua exposto
   — só que agora com uma falsa sensação de controle, que é pior que nenhum controle.
 - **Verificação:** o workflow publica `type=semver` apenas a partir de tag `v*`, e tag git não
-  se reaponta. A dívida conhecida: o GHCR não impõe imutabilidade por configuração — a
+  se reaponta. A dívida conhecida: o Docker Hub não impõe imutabilidade por configuração — a
   garantia é de processo, e por isso o checklist de release proíbe reuso de número.
 
 ### 5. `pull_policy` acompanha a mutabilidade da tag
@@ -199,7 +203,7 @@ Tag imutável → `missing`. Tag móvel → `always`.
 
   Com tag móvel, `always` é o que faz o canal significar alguma coisa. Com tag imutável, ele
   não protege de nada — só amarra a disponibilidade do CRM de um cliente pago à
-  disponibilidade do GHCR, em todo `up -d`. O `update.sh` não depende disso: ele puxa
+  disponibilidade do registry, em todo `up -d`. O `update.sh` não depende disso: ele puxa
   explicitamente com `dc pull` antes de subir.
 - **Verificação:** `tests/shell/update-guard.test.sh` prova que instalação pinada grava
   `APP_PULL_POLICY=missing`.
@@ -228,7 +232,7 @@ default que preserva o comportamento anterior**; se ela precisa existir, quem a 
 `GET /api/v1/health` responde a versão real da imagem em execução.
 
 > **Vale a partir da próxima release.** Nenhuma imagem já publicada carrega
-> `APP_VERSION` — medido: `docker run --rm ghcr.io/melgarafael/deskcommcrm:1.2.1 node -e
+> `APP_VERSION` — medido: `docker run --rm docker.io/somamais/deskcommcrm:1.2.1 node -e
 > 'console.log(process.env.APP_VERSION)'` → `undefined`. Todo o parque instalado hoje
 > responde `desconhecido`, que é a resposta honesta e o motivo de o fallback não ser mais
 > um número plausível. O item 9 do checklist de release reprova contra a 1.2.1 de propósito.
@@ -352,7 +356,7 @@ downgrade silencioso no próximo `up -d`, com app antigo sobre banco já migrado
 Um bump de versão **pode** exigir do operador da VPS:
 
 - rodar `update.sh` (ou clicar "Atualizar agora" na tela);
-- que a VPS alcance o GHCR e o Supabase durante a atualização.
+- que a VPS alcance o Docker Hub e o Supabase durante a atualização.
 
 Um bump de versão **não pode** exigir:
 
@@ -372,24 +376,23 @@ Um bump de versão **não pode** exigir:
 Verificável, na ordem. Nenhum item é "conferir se está tudo bem".
 
 A sonda do registry vem primeiro porque os itens 3 e 6 dependem dela — e porque `curl` cru no
-GHCR responde **401**, que não contém a versão procurada e por isso seria lido como aprovação
+Docker Hub responde **401**, que não contém a versão procurada e por isso seria lido como aprovação
 pelo item 3. Um gate que aprova por erro de autenticação é pior que gate nenhum:
 
 ```bash
 # Cole no shell antes de começar. Funciona anonimamente (o pacote é público).
-ghcr_status() {   # $1=imagem  $2=tag  → 200 existe | 404 não existe | 403 pacote privado
+registry_status() {   # $1=imagem  $2=tag  → 200 existe | 404 não existe | 401/403 privado
   local t
-  t=$(curl -s "https://ghcr.io/token?scope=repository:melgarafael/$1:pull&service=ghcr.io" \
+  t=$(curl -s "https://auth.docker.io/token?scope=repository:somamais/$1:pull&service=registry.docker.io" \
       | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
   curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $t" \
     -H 'Accept: application/vnd.oci.image.index.v1+json' \
-    "https://ghcr.io/v2/melgarafael/$1/manifests/$2"
+    "https://registry-1.docker.io/v2/somamais/$1/manifests/$2"
 }
 ```
 
-**403 não é "não existe": é pacote PRIVADO.** Todo pacote recém-criado no GHCR nasce privado,
-e repositório público não muda isso. Enquanto não for tornado público na mão (Package settings
-→ visibility), o `docker compose pull` de **toda VPS** é negado — e, como o `pull` de um
+**401/403 não é "não existe": é imagem PRIVADA.** Enquanto ela não for tornada pública no Docker
+Hub, o `docker compose pull` de **toda VPS** é negado — e, como o `pull` de um
 serviço com `image:` falha a operação inteira, a atualização morre depois do `git checkout` e
 do banco. É o passo que mais trava na estreia de uma imagem nova.
 
@@ -398,7 +401,7 @@ do banco. É o passo que mais trava na estreia de uma imagem nova.
 [ ] 2. Nenhuma variável nova é obrigatória sem default (grep no diff de .env.example)
 [ ] 3. O número da versão NUNCA foi publicado antes:
        git tag --list 'vX.Y.Z'                     → vazio
-       ghcr_status deskcommcrm X.Y.Z               → 404
+       registry_status deskcommcrm X.Y.Z           → 404
 [ ] 4. Os pins upstream foram revisitados: `waha`, `srh`, `redis`, `caddy`, `postgres`.
        Bumpar ou confirmar que ficam — congelar sem revisar é como o `srh` ficou
        três versões atrás sem ninguém decidir isso
@@ -407,17 +410,17 @@ do banco. É o passo que mais trava na estreia de uma imagem nova.
        gh run list --workflow=publish-image.yml --limit 3
 [ ] 7. As TRÊS imagens existem E são públicas nesta versão:
        for i in deskcommcrm deskcomm-worker deskcomm-scheduler; do
-         echo "$i: $(ghcr_status $i X.Y.Z)"; done      → 200 nas três
-       403 em alguma? Torne o pacote público ANTES de seguir
+         echo "$i: $(registry_status $i X.Y.Z)"; done  → 200 nas três
+       401/403 em alguma? Torne a imagem pública ANTES de seguir
 [ ] 8. A imagem reporta a versão certa:
-       docker run --rm ghcr.io/melgarafael/deskcommcrm:X.Y.Z \
+       docker run --rm docker.io/somamais/deskcommcrm:X.Y.Z \
          node -e 'console.log(process.env.APP_VERSION)'   → X.Y.Z
 [ ] 9. `gh release create vX.Y.Z` com as notas do CHANGELOG
 [ ] 10. SÓ AGORA: `stable` e X.Y.Z são o MESMO digest, nas três imagens:
         for i in deskcommcrm deskcomm-worker deskcomm-scheduler; do
           for t in X.Y.Z stable; do
             echo -n "$i:$t "; docker buildx imagetools inspect \
-              ghcr.io/melgarafael/$i:$t --format '{{.Manifest.Digest}}'; done; done
+              docker.io/somamais/$i:$t --format '{{.Manifest.Digest}}'; done; done
         → o par de cada imagem tem que bater
         Não bateu? Alguma coisa republicou depois do push da tag. NÃO siga:
         um canal apontando para build diferente da versão é o invariante 3
@@ -474,13 +477,10 @@ parque instalado** percorre, e é o único que a suíte de CI não exercita.
 
 ## Decisões registradas
 
-**2026-08-13 — o namespace fica em `melgarafael`.** Uma consultoria externa recomendou criar
-uma org `deskcommcrm` e migrar, sob a premissa de que o compose apontava para uma org
-desvinculada do repo. A premissa era falsa: o compose sempre apontou para
-`ghcr.io/melgarafael/deskcommcrm`, que é o que o CI publica e o que está gravado no `.env` de
-todo cliente instalado. A string `deskcommcrm/deskcommcrm` existia num único lugar — uma URL
-de `git clone` em `docs/deploy-selfhost/README.md`, que retornava 404. O conserto proporcional
-ao defeito foi essa linha. Racional completo no ADR.
+**2026-09-12 — o namespace de instalação passa a `docker.io/somamais`.** A mudança é aditiva:
+a release de transição também publica no GHCR para que o atualizador legado conclua sua primeira
+execução. O novo kit grava Docker Hub para instalações novas e para a atualização seguinte do
+parque existente. Racional completo no ADR.
 
 **2026-08-13 — a régua de RAM é de operação, não de build.** A mesma consultoria argumentou
 que publicar a imagem derrubaria o requisito de 4 GB para 2 GB. Os 4 GB nunca foram custo de

@@ -1,0 +1,238 @@
+# DeskcommCRM — Stack Portainer em Docker Swarm com Traefik externo.
+#
+# Antes de publicar a stack, cadastre estas variáveis em Portainer > Stack >
+# Environment variables (os valores nunca entram neste arquivo):
+#   DOMAIN, CRM_VERSION, DOCKERHUB_NAMESPACE=somamais,
+#   NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+#   SUPABASE_SERVICE_ROLE_KEY, SUPABASE_DB_URL, INTERNAL_SECRET,
+#   INTERNAL_CRON_SECRET, CPF_ENCRYPTION_KEY, WAHA_BYO_ENCRYPTION_KEY,
+#   AI_CRED_AES_KEY, WAHA_API_KEY, WAHA_API_KEY_SHA512, WAHA_HMAC_SECRET,
+#   SRH_TOKEN e ao menos uma chave de IA (AI_GATEWAY_API_KEY,
+#   OPENROUTER_API_KEY ou ANTHROPIC_API_KEY).
+#
+# CRM_VERSION DEVE ser uma tag numérica publicada nas três imagens, por exemplo
+# 1.20.1. Não use stable ou latest numa instalação de produção: essas tags se
+# movem e tornam impossível reproduzir exatamente a versão em execução.
+#
+# Esta stack reproduz o ambiente Portainer já existente:
+# - rede pública externa: network_public
+# - Traefik Swarm: web, websecure e letsencryptresolver
+# - apenas o serviço app entra na rede pública
+#
+# O WAHA chama o app por http://app:3000. Assim o endpoint global de webhook
+# fica bloqueado no Traefik e não pode receber eventos forjados da internet.
+
+version: "3.8"
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-runtime-env: &runtime-env
+  NODE_ENV: production
+  NEXT_PUBLIC_SUPABASE_URL: "${NEXT_PUBLIC_SUPABASE_URL}"
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: "${NEXT_PUBLIC_SUPABASE_ANON_KEY}"
+  SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY}"
+  SUPABASE_DB_URL: "${SUPABASE_DB_URL}"
+  INTERNAL_SECRET: "${INTERNAL_SECRET}"
+  INTERNAL_CRON_SECRET: "${INTERNAL_CRON_SECRET:-}"
+  CPF_ENCRYPTION_KEY: "${CPF_ENCRYPTION_KEY}"
+  WAHA_BYO_ENCRYPTION_KEY: "${WAHA_BYO_ENCRYPTION_KEY}"
+  AI_CRED_AES_KEY: "${AI_CRED_AES_KEY}"
+  WAHA_API_BASE_URL: "http://waha:3000"
+  WAHA_API_KEY: "${WAHA_API_KEY}"
+  WAHA_WEBHOOK_BASE_URL: "http://app:3000"
+  WAHA_HMAC_SECRET: "${WAHA_HMAC_SECRET}"
+  WAHA_WEBHOOK_REQUIRE_SIGNATURE: "${WAHA_WEBHOOK_REQUIRE_SIGNATURE:-false}"
+  UPSTASH_REDIS_REST_URL: "http://srh:80"
+  UPSTASH_REDIS_REST_TOKEN: "${SRH_TOKEN}"
+  AI_GATEWAY_API_KEY: "${AI_GATEWAY_API_KEY:-}"
+  AI_GATEWAY_BASE_URL: "${AI_GATEWAY_BASE_URL:-}"
+  VERCEL_AI_GATEWAY_URL: "${VERCEL_AI_GATEWAY_URL:-}"
+  OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+  OPENROUTER_BASE_URL: "${OPENROUTER_BASE_URL:-}"
+  OPENROUTER_APP_URL: "${OPENROUTER_APP_URL:-}"
+  OPENROUTER_APP_TITLE: "${OPENROUTER_APP_TITLE:-}"
+  ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+  OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+  AGENT_DISPATCH_CONSUMER: "${AGENT_DISPATCH_CONSUMER:-engine}"
+  AI_BUDGET_ENFORCEMENT: "${AI_BUDGET_ENFORCEMENT:-on}"
+  EVENT_LOG_DRAIN_INTERVAL_MS: "${EVENT_LOG_DRAIN_INTERVAL_MS:-2000}"
+  EVENT_LOG_DRAIN_IDLE_INTERVAL_MS: "${EVENT_LOG_DRAIN_IDLE_INTERVAL_MS:-10000}"
+  EVENT_LOG_DRAIN_BATCH_SIZE: "${EVENT_LOG_DRAIN_BATCH_SIZE:-50}"
+  SENTRY_DSN: "${SENTRY_DSN:-}"
+  RESEND_API_KEY: "${RESEND_API_KEY:-}"
+  RESEND_FROM_EMAIL: "${RESEND_FROM_EMAIL:-}"
+  IMPERSONATE_COOKIE_SECRET: "${IMPERSONATE_COOKIE_SECRET:-}"
+  SUPPORT_EMAIL: "${SUPPORT_EMAIL:-}"
+  LGPD_SIGNING_KEY: "${LGPD_SIGNING_KEY:-}"
+  LGPD_DPO_EMAIL: "${LGPD_DPO_EMAIL:-}"
+  GOOGLE_CALENDAR_CLIENT_ID: "${GOOGLE_CALENDAR_CLIENT_ID:-}"
+  GOOGLE_CALENDAR_CLIENT_SECRET: "${GOOGLE_CALENDAR_CLIENT_SECRET:-}"
+  NUVEMSHOP_ENABLED: "${NUVEMSHOP_ENABLED:-false}"
+  NUVEMSHOP_APP_ID: "${NUVEMSHOP_APP_ID:-}"
+  NUVEMSHOP_CLIENT_ID: "${NUVEMSHOP_CLIENT_ID:-}"
+  NUVEMSHOP_CLIENT_SECRET: "${NUVEMSHOP_CLIENT_SECRET:-}"
+  NEXT_PUBLIC_APP_URL: "https://${DOMAIN}"
+  NEXT_PUBLIC_ADMIN_URL: "https://${DOMAIN}"
+  APP_NAME: "${APP_NAME:-}"
+  APP_LOGO_URL: "${APP_LOGO_URL:-}"
+  APP_ACCENT_HEX: "${APP_ACCENT_HEX:-}"
+  VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY:-}"
+  VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY:-}"
+  WEBHOOK_LOG_BODY_RETENTION_DAYS: "${WEBHOOK_LOG_BODY_RETENTION_DAYS:-7}"
+  WEBHOOK_LOG_ROW_RETENTION_DAYS: "${WEBHOOK_LOG_ROW_RETENTION_DAYS:-90}"
+  LEAD_CAPTURE_RETENTION_DAYS: "${LEAD_CAPTURE_RETENTION_DAYS:-365}"
+  JOB_QUEUE_RETENTION_DAYS: "${JOB_QUEUE_RETENTION_DAYS:-90}"
+  AUDIT_LOG_RETENTION_DAYS: "${AUDIT_LOG_RETENTION_DAYS:-1825}"
+
+services:
+  app:
+    image: "docker.io/${DOCKERHUB_NAMESPACE}/deskcommcrm:${CRM_VERSION}"
+    environment: *runtime-env
+    networks:
+      - internal
+      - network_public
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 768M
+      restart_policy:
+        condition: any
+      labels:
+        - "traefik.enable=true"
+        - "traefik.swarm.network=network_public"
+        - "traefik.http.routers.deskcommcrm-http.rule=Host(`${DOMAIN}`)"
+        - "traefik.http.routers.deskcommcrm-http.entrypoints=web"
+        - "traefik.http.routers.deskcommcrm-http.middlewares=deskcommcrm-redirect-https"
+        - "traefik.http.routers.deskcommcrm-http.service=deskcommcrm-web"
+        - "traefik.http.routers.deskcommcrm.rule=Host(`${DOMAIN}`)"
+        - "traefik.http.routers.deskcommcrm.entrypoints=websecure"
+        - "traefik.http.routers.deskcommcrm.tls=true"
+        - "traefik.http.routers.deskcommcrm.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.deskcommcrm.middlewares=deskcommcrm-security-headers"
+        - "traefik.http.routers.deskcommcrm.service=deskcommcrm-web"
+        - "traefik.http.services.deskcommcrm-web.loadbalancer.server.port=3000"
+        - "traefik.http.middlewares.deskcommcrm-redirect-https.redirectscheme.scheme=https"
+        - "traefik.http.middlewares.deskcommcrm-redirect-https.redirectscheme.permanent=true"
+        - "traefik.http.middlewares.deskcommcrm-security-headers.headers.stsSeconds=31536000"
+        - "traefik.http.middlewares.deskcommcrm-security-headers.headers.stsIncludeSubdomains=false"
+        - "traefik.http.middlewares.deskcommcrm-security-headers.headers.stsPreload=false"
+        - "traefik.http.middlewares.deskcommcrm-security-headers.headers.forceSTSHeader=true"
+        - "traefik.http.middlewares.deskcommcrm-security-headers.headers.contentTypeNosniff=true"
+        - "traefik.http.middlewares.deskcommcrm-security-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+        - "traefik.http.middlewares.deskcommcrm-security-headers.headers.frameDeny=true"
+        - "traefik.http.routers.deskcommcrm-waha-block.rule=Host(`${DOMAIN}`) && Path(`/api/v1/webhooks/waha`)"
+        - "traefik.http.routers.deskcommcrm-waha-block.entrypoints=websecure"
+        - "traefik.http.routers.deskcommcrm-waha-block.tls=true"
+        - "traefik.http.routers.deskcommcrm-waha-block.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.deskcommcrm-waha-block.priority=1000"
+        - "traefik.http.routers.deskcommcrm-waha-block.service=deskcommcrm-web"
+        - "traefik.http.routers.deskcommcrm-waha-block.middlewares=deskcommcrm-deny"
+        - "traefik.http.middlewares.deskcommcrm-deny.ipallowlist.sourcerange=192.0.2.1/32"
+
+  worker:
+    image: "docker.io/${DOCKERHUB_NAMESPACE}/deskcomm-worker:${CRM_VERSION}"
+    environment: *runtime-env
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8787/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 512M
+      restart_policy:
+        condition: any
+
+  scheduler:
+    image: "docker.io/${DOCKERHUB_NAMESPACE}/deskcomm-scheduler:${CRM_VERSION}"
+    environment:
+      TZ: "${TZ:-America/Fortaleza}"
+      INTERNAL_SECRET: "${INTERNAL_SECRET}"
+    networks: [internal]
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+
+  waha:
+    image: "devlikeapro/waha:latest-2026.7.2"
+    environment:
+      WAHA_API_KEY: "sha512:${WAHA_API_KEY_SHA512}"
+      WHATSAPP_HOOK_URL: "http://app:3000/api/v1/webhooks/waha"
+      WHATSAPP_HOOK_EVENTS: "message.any,message.ack,message.edited,message.revoked,session.status,state.change"
+      WHATSAPP_HOOK_HMAC: "${WAHA_HMAC_SECRET}"
+      WHATSAPP_DEFAULT_ENGINE: "${WHATSAPP_DEFAULT_ENGINE:-NOWEB}"
+      WAHA_DASHBOARD_ENABLED: "false"
+      WHATSAPP_RESTART_ALL_SESSIONS: "${WHATSAPP_RESTART_ALL_SESSIONS:-True}"
+    volumes:
+      - waha-data:/app/.sessions
+      - waha-media:/app/.media
+    networks: [internal]
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 1280M
+      restart_policy:
+        condition: any
+
+  redis:
+    image: "redis:7-alpine"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+
+  srh:
+    image: "hiett/serverless-redis-http@sha256:5b0bb9239fce53abf87b2018a7a0deb9ec7bd900c5360738fe5fbeeb426f9150"
+    environment:
+      SRH_MODE: env
+      SRH_TOKEN: "${SRH_TOKEN}"
+      SRH_CONNECTION_STRING: "redis://redis:6379"
+    networks: [internal]
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+
+# WaCalls não entra nesta stack: é uma função opcional que publica UDP e requer
+# credenciais próprias. O CRM, WAHA, worker e agendador funcionam sem ela.
+
+volumes:
+  waha-data:
+  waha-media:
+
+networks:
+  internal:
+    driver: overlay
+    attachable: true
+  network_public:
+    external: true

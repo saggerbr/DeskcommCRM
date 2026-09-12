@@ -240,6 +240,8 @@ jobs:
         if: steps.pendente.outputs.cortar == 'sim'
         env:
           VERSAO: ${{ steps.pendente.outputs.versao }}
+          DOCKERHUB_NAMESPACE: somamais
+          DOCKERHUB_NAMESPACE: somamais
         run: |
           set -euo pipefail
           git config user.name  'deskcomm-release[bot]'
@@ -296,23 +298,31 @@ jobs:
           # v1.12.0 saiu com `stable` do app na 1.11.0 e o das outras duas na
           # 1.12.0 sem ninguém ver (issue #488): quem instalava por `stable`
           # recebia um parque MISTURADO, e nenhum gate tinha opinião.
-          ghcr_digest() {
-            local t
-            t=$(curl -s "https://ghcr.io/token?scope=repository:${GITHUB_REPOSITORY_OWNER}/$1:pull&service=ghcr.io" \
+          registry_digest() { # <registry/dono> <imagem> <tag>
+            local namespace="$1" imagem="$2" tag="$3" registry dono auth_host api_host service t
+            registry="${namespace%%/*}"
+            dono="${namespace#*/}"
+            if [ "$registry" = docker.io ]; then
+              auth_host=auth.docker.io; api_host=registry-1.docker.io; service=registry.docker.io
+            else
+              auth_host="$registry"; api_host="$registry"; service="$registry"
+            fi
+            t=$(curl -s "https://${auth_host}/token?scope=repository:${dono}/${imagem}:pull&service=${service}" \
                 | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
             curl -sI -H "Authorization: Bearer $t" \
               -H 'Accept: application/vnd.oci.image.index.v1+json' \
               -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
-              "https://ghcr.io/v2/${GITHUB_REPOSITORY_OWNER}/$1/manifests/$2" \
+              "https://${api_host}/v2/${dono}/${imagem}/manifests/${tag}" \
               | tr -d '\r' | tr '[:upper:]' '[:lower:]' \
               | sed -n 's/^docker-content-digest: //p'
           }
+          registries=("ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" "docker.io/${DOCKERHUB_NAMESPACE}")
           echo "esperando a publicação de v${VERSAO}…"
           for _ in $(seq 1 60); do
             faltando=""
-            for img in deskcommcrm deskcomm-worker deskcomm-scheduler; do
-              [ -n "$(ghcr_digest "$img" "${VERSAO}")" ] || faltando="${faltando} ${img}"
-            done
+            for registry in "${registries[@]}"; do for img in deskcommcrm deskcomm-worker deskcomm-scheduler; do
+              [ -n "$(registry_digest "$registry" "$img" "${VERSAO}")" ] || faltando="${faltando} ${registry}/${img}"
+            done; done
             if [ -z "$faltando" ]; then
               echo "as três imagens respondem em ${VERSAO}"
               break
@@ -336,12 +346,12 @@ jobs:
           divergentes=""
           for _ in $(seq 1 20); do
             divergentes=""
-            for img in deskcommcrm deskcomm-worker deskcomm-scheduler; do
-              d_versao=$(ghcr_digest "$img" "${VERSAO}")
-              d_stable=$(ghcr_digest "$img" stable)
-              echo "  ${img}: ${VERSAO}=${d_versao:-ausente} stable=${d_stable:-ausente}"
-              [ -n "${d_versao}" ] && [ "${d_versao}" = "${d_stable}" ] || divergentes="${divergentes} ${img}"
-            done
+            for registry in "${registries[@]}"; do for img in deskcommcrm deskcomm-worker deskcomm-scheduler; do
+              d_versao=$(registry_digest "$registry" "$img" "${VERSAO}")
+              d_stable=$(registry_digest "$registry" "$img" stable)
+              echo "  ${registry}/${img}: ${VERSAO}=${d_versao:-ausente} stable=${d_stable:-ausente}"
+              [ -n "${d_versao}" ] && [ "${d_versao}" = "${d_stable}" ] || divergentes="${divergentes} ${registry}/${img}"
+            done; done
             [ -z "${divergentes}" ] && break
             sleep 30
           done

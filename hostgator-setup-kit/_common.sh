@@ -433,7 +433,7 @@ psql_run() { docker run --rm -i postgres:17-alpine psql "$(url_do_schema)" -v ON
 # `docker-compose.prod.yml`, `.env.hostgator.example` e a matriz de
 # `publish-image.yml` digam o mesmo. Se você é um fork, é lá que está a lista do
 # que trocar junto.
-IMG_NS="ghcr.io/melgarafael"
+IMG_NS="docker.io/somamais"
 IMG_APP="${IMG_NS}/deskcommcrm"
 IMG_WORKER="${IMG_NS}/deskcomm-worker"
 IMG_SCHEDULER="${IMG_NS}/deskcomm-scheduler"
@@ -462,36 +462,39 @@ ultima_versao_publicada() {
   printf '%s' "${ref#refs/tags/v}"
 }
 
-# Código HTTP do manifest de uma referência nossa no GHCR, anonimamente.
+# Código HTTP do manifest de uma referência nossa no registry, anonimamente.
 #   200 = existe e é pública | 404 = não existe | 403 = pacote PRIVADO | 000 = sem rede
 #
-# 403 é o caso que mais engana: pacote recém-criado no GHCR nasce privado, e
-# repositório público não muda isso. Enquanto ninguém trocar a visibilidade na
-# mão, o `docker compose pull` de toda VPS é negado — e como `pull` de serviço
-# com `image:` falha a operação inteira, a instalação morre no passo de subir.
+# No Docker Hub, uma imagem privada também devolve 401/403 no pull anônimo.
+# Para uma instalação self-host, isso é indisponível: o `docker compose pull`
+# falha e a instalação não chega a subir.
 #
-# ⚠️ O DONO E O REGISTRO SAEM DO `IMG_NS`, NUNCA DE UM LITERAL. Achado por
-# @galeonel no PR #605: as duas URLs abaixo tinham `melgarafael` cravado. Num
-# fork que troca o `IMG_NS`, isso faz o pré-voo conferir os pacotes do UPSTREAM
-# enquanto `gravar_imagens` escreve no `.env` do cliente as referências do FORK
-# — a sonda mede um caminho e o usuário usa outro, que é a falha-em-verde do
-# passe 5 da triagem.
-#
-# E o literal escapava da catraca por acidente: `namespace-das-imagens.test.ts`
-# procura a string contígua `ghcr.io/melgarafael`, e a URL do token a parte em
-# `ghcr.io/token?scope=repository:melgarafael/`.
-ghcr_status() {
-  local img="$1" tag="$2" tok registry owner
+# O dono e o registry saem do `IMG_NS`, nunca de um literal. O Docker Hub usa
+# hosts diferentes para token e manifest; os demais registries OCI usam o
+# próprio host. Assim o fork valida o caminho que realmente grava no `.env`.
+registry_status() {
+  local img="$1" tag="$2" tok registry owner auth_host api_host service
   registry="${IMG_NS%%/*}"
   owner="${IMG_NS#*/}"
+
+  if [ "$registry" = "docker.io" ]; then
+    auth_host="auth.docker.io"
+    api_host="registry-1.docker.io"
+    service="registry.docker.io"
+  else
+    auth_host="$registry"
+    api_host="$registry"
+    service="$registry"
+  fi
+
   tok="$(curl -fsS --max-time 6 \
-          "https://${registry}/token?scope=repository:${owner}/${img}:pull&service=${registry}" 2>/dev/null \
+          "https://${auth_host}/token?scope=repository:${owner}/${img}:pull&service=${service}" 2>/dev/null \
         | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" || true
   if [ -z "$tok" ]; then printf '000'; return 0; fi
   curl -s -o /dev/null --max-time 6 -w '%{http_code}' \
     -H "Authorization: Bearer $tok" \
     -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json' \
-    "https://${registry}/v2/${owner}/${img}/manifests/${tag}" 2>/dev/null || printf '000'
+    "https://${api_host}/v2/${owner}/${img}/manifests/${tag}" 2>/dev/null || printf '000'
 }
 
 # As TRÊS imagens existem e são públicas nesta referência?
@@ -506,7 +509,7 @@ ghcr_status() {
 trio_publicado() {
   local tag="$1" i
   for i in deskcommcrm deskcomm-worker deskcomm-scheduler; do
-    [ "$(ghcr_status "$i" "$tag")" = "200" ] || return 1
+    [ "$(registry_status "$i" "$tag")" = "200" ] || return 1
   done
   return 0
 }

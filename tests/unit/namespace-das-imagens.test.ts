@@ -53,7 +53,7 @@ const PUBLICA = fs.readFileSync(path.join(RAIZ, ".github/workflows/publish-image
 const ENV_EXEMPLO = fs.readFileSync(path.join(RAIZ, ".env.hostgator.example"), "utf8");
 
 /** O valor literal que este repositório publica. A âncora. */
-const NAMESPACE_DESTE_REPO = "ghcr.io/melgarafael";
+const NAMESPACE_DESTE_REPO = "docker.io/somamais";
 
 /**
  * Um fork que publica as próprias imagens muda `IMG_NS` — e precisa mudar junto
@@ -113,8 +113,8 @@ describe("o namespace das imagens tem uma âncora, e uma só", () => {
     expect(imgNs(), RECADO_AO_FORK).toBe(NAMESPACE_DESTE_REPO);
   });
 
-  it("IMG_NS tem a forma <registry>/<dono> — a única que o GHCR publica", () => {
-    // O workflow publica em `${REGISTRY}/${github.repository_owner}/${nome}`:
+  it("IMG_NS tem a forma <registry>/<dono> usada pelo Docker Hub", () => {
+    // O workflow publica em `${DOCKERHUB_NAMESPACE}/${nome}`:
     // exatamente dois segmentos antes do nome da imagem. Um IMG_NS com três
     // (ou com um) monta uma referência que o registry nunca vai ter, e o
     // sintoma chega só no `docker compose pull` da VPS do cliente.
@@ -174,7 +174,7 @@ describe("o kit aponta para o que o CI realmente publica", () => {
   });
 
   it.each([undefined, "registry.example/outro-dono"])(
-    "ghcr_status consulta token e manifesto no IMG_NS (%s)",
+    "registry_status consulta token e manifesto no IMG_NS (%s)",
     (namespace) => {
       const ns = namespace ?? imgNs();
       const [registry, owner] = ns.split("/");
@@ -198,7 +198,7 @@ describe("o kit aponta para o que o CI realmente publica", () => {
         log=$(mktemp)
         trap 'rm -f "$log"' EXIT
         # O dublê registra em arquivo porque a função captura stdout do curl.
-        ghcr_status deskcommcrm 1.2.3
+        registry_status deskcommcrm 1.2.3
         printf '\\n'
         cat "$log"
       `,
@@ -207,25 +207,26 @@ describe("o kit aponta para o que o CI realmente publica", () => {
         ],
         { cwd: RAIZ, encoding: "utf8" },
       );
+      const authHost = registry === "docker.io" ? "auth.docker.io" : registry;
+      const apiHost = registry === "docker.io" ? "registry-1.docker.io" : registry;
+      const service = registry === "docker.io" ? "registry.docker.io" : registry;
       expect(saida.trim().split("\n")).toEqual([
         "200",
-        `https://${registry}/token?scope=repository:${owner}/deskcommcrm:pull&service=${registry}`,
-        `https://${registry}/v2/${owner}/deskcommcrm/manifests/1.2.3`,
+        `https://${authHost}/token?scope=repository:${owner}/deskcommcrm:pull&service=${service}`,
+        `https://${apiHost}/v2/${owner}/deskcommcrm/manifests/1.2.3`,
       ]);
     },
   );
 
-  it("o registry do kit é o mesmo do workflow de publicação", () => {
-    const m = PUBLICA.match(/^\s*REGISTRY:\s*(\S+)$/m);
-    expect(m, "não achei `REGISTRY:` em .github/workflows/publish-image.yml").not.toBeNull();
-    expect(imgNs().split("/")[0]).toBe(m![1]);
+  it("o namespace do kit é o destino Docker Hub do workflow", () => {
+    const m = PUBLICA.match(/^\s*DOCKERHUB_NAMESPACE:\s*(\S+)$/m);
+    expect(m, "não achei `DOCKERHUB_NAMESPACE:` em .github/workflows/publish-image.yml").not.toBeNull();
+    expect(imgNs()).toBe(`docker.io/${m![1]}`);
   });
 
-  it("o workflow ainda deriva o dono do repositório, em vez de fixar um", () => {
-    // Se esta linha virar um literal, o namespace passa a ter três donos e um
-    // fork perde a única parte que já funcionava sozinha para ele.
+  it("o workflow usa o namespace Docker Hub declarado, sem uma terceira cópia", () => {
     expect(PUBLICA).toContain(
-      "images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}",
+      '--repository "docker.io/${DOCKERHUB_NAMESPACE}"',
     );
   });
 

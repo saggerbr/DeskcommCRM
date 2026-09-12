@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -159,7 +160,7 @@ describe("packaging — o artefato que o cliente instala", () => {
     // registry sem responder para aquela referência, o `up -d` FALHA e o
     // contêiner não sobe — mesmo com a imagem já no disco. Com tag imutável isso
     // não protege de nada e só amarra a disponibilidade do CRM do cliente à do
-    // GHCR. No sentido oposto, tag móvel com 'missing' puxa uma vez e congela:
+    // registry. No sentido oposto, tag móvel com 'missing' puxa uma vez e congela:
     // é o defeito do worker voltando por outra porta.
     let avaliados = 0;
 
@@ -179,7 +180,7 @@ describe("packaging — o artefato que o cliente instala", () => {
         defaultDaPolitica,
         `'${nome}' aponta para a tag ${tagEhMovel ? "MÓVEL" : "IMUTÁVEL"} '${tagDaImagem}' ` +
           `com pull_policy '${defaultDaPolitica}'. Tag móvel usa 'always' (senão a versão ` +
-          `nunca chega); tag imutável usa 'missing' (senão o CRM só sobe se o GHCR estiver ` +
+          `nunca chega); tag imutável usa 'missing' (senão o CRM só sobe se o registry estiver ` +
           `de pé). Ver docs/doctrine/packaging.md, invariante 5.`,
       ).toBe(esperado);
     }
@@ -217,7 +218,7 @@ describe("packaging — o artefato que o cliente instala", () => {
   });
 
   it("cada Dockerfile publicado declara procedência OCI e ARG APP_VERSION", () => {
-    // O CI injeta os labels via docker/metadata-action, mas o build local do
+    // O CI injeta os labels pelo script versionado, mas o build local do
     // docker-compose.build.yml não passa por ele. Sem LABEL no arquivo, essa
     // imagem sai sem origem nenhuma — e é justamente a que vira dívida numa VPS.
     for (const arquivo of ["Dockerfile", "Dockerfile.worker", "Dockerfile.scheduler"]) {
@@ -237,12 +238,43 @@ describe("packaging — o artefato que o cliente instala", () => {
     expect(wf, "publish-image.yml não passa APP_VERSION como build-arg").toContain(
       "APP_VERSION=",
     );
+    expect(wf, "o workflow não usa o script versionado de publicação").toContain(
+      "scripts/publicar-imagem-docker.sh",
+    );
+    expect(
+      fs.readFileSync(path.join(RAIZ, "scripts/publicar-imagem-docker.sh"), "utf8"),
+      "o script não exige uma versão explícita",
+    ).toContain("--version");
     // A sonda prende o EFEITO (o canal `stable` passa a existir), não a forma.
     // Ela já mudou uma vez: `stable` saiu da lista de tags da matriz — onde cada
     // imagem o movia sozinha — para o job `promover-stable`, que só roda com as
     // três publicadas (issue #488). Prender `value=stable` fazia esta guarda
     // reprovar justamente o conserto.
     expect(wf, "publish-image.yml não cria o canal 'stable'").toMatch(/:stable\b/);
+  });
+
+  it("o script de publicação exige versão e não permite publicar da máquina local", () => {
+    const script = path.join(RAIZ, "scripts/publicar-imagem-docker.sh");
+    const repositorio = ["docker.io", "somamais"].join("/");
+    const ajuda = execFileSync("bash", [script, "--help"], { cwd: RAIZ, encoding: "utf8" });
+    expect(ajuda).toContain("--version");
+
+    expect(() =>
+      execFileSync(
+        "bash",
+        [
+          script,
+          "--image",
+          "deskcommcrm",
+          "--version",
+          "1.20.0",
+          "--repository",
+          repositorio,
+          "--publish",
+        ],
+        { cwd: RAIZ, encoding: "utf8", stdio: "pipe" },
+      ),
+    ).toThrow(/Publicação recusada fora do CI/);
   });
 
   it("nenhum gatilho reconstrói uma tag já publicada", () => {

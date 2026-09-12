@@ -1394,20 +1394,20 @@ montar_vps() {
   cat > "$raiz/bin/docker"
   # Só o v_supabase_url exige resposta online (000 reprova); os outros toleram.
   #
-  # O dublê fala DOIS protocolos porque o install.sh passou a sondar o GHCR
-  # antes de pinar as imagens (`ghcr_status`/`trio_publicado` no _common.sh): o
+  # O dublê fala DOIS protocolos porque o install.sh sonda o registry antes de
+  # pinar as imagens (`registry_status`/`trio_publicado` no _common.sh): o
   # endpoint de token devolve JSON, o de manifest devolve o código HTTP. Um
   # dublê que respondesse `200` para tudo faria o `sed` do token sair vazio, a
   # sonda devolver `000`, e a suíte passaria a exercitar o ramo de fallback
   # achando que exercita o normal — verde medindo outra coisa.
   #
-  # `DUBLE_GHCR` permite ao teste escolher o cenário: vazio/`200` = as três
+  # `DUBLE_REGISTRY` permite ao teste escolher o cenário: vazio/`200` = as três
   # imagens publicadas; `403` = pacote privado; `404` = não existe.
   cat > "$raiz/bin/curl" <<'STUBCURL'
 #!/usr/bin/env bash
 case "$*" in
-  *ghcr.io/token*) printf '{"token":"dublê"}' ;;
-  *ghcr.io/v2/*)   printf '%s' "${DUBLE_GHCR:-200}" ;;
+  *auth.docker.io/token*|*ghcr.io/token*) printf '{"token":"dublê"}' ;;
+  *registry-1.docker.io/v2/*|*ghcr.io/v2/*) printf '%s' "${DUBLE_REGISTRY:-200}" ;;
   *)               printf 200 ;;
 esac
 STUBCURL
@@ -1788,7 +1788,7 @@ STUB
     fi
   done
   if [ "$(valor_no_env "$VPS_PROJ/.env" APP_PULL_POLICY)" = "always" ]; then
-    printf '  ✗ tag imutável com pull_policy=always: o CRM só sobe se o GHCR estiver de pé\n'; exit 1
+    printf '  ✗ tag imutável com pull_policy=always: o CRM só sobe se o registry estiver de pé\n'; exit 1
   fi
   printf '  ✓ com v1.0.0/v1.9.0/v1.10.0 no remoto, o .env nasce pinado em 1.10.0 (as três imagens)\n'
 ) || fail=1
@@ -1802,7 +1802,7 @@ echo "packaging: a tag do git não basta — as imagens têm de existir"
 # SILÊNCIO, do topo da main — app de uma release, worker de outro código.
 #
 # 403 é o caso que trava na estreia de uma imagem nova: pacote recém-criado no
-# GHCR nasce privado, e repositório público não muda isso.
+# Imagem privada bloqueia o pull anônimo da instalação.
 TMP_PRIV="$(mktemp -d)"
 (
   montar_vps "$TMP_PRIV/vps" "crmpriv" <<'STUB'
@@ -1813,9 +1813,9 @@ case "$1" in
 esac
 exit 0
 STUB
-  export DUBLE_GHCR=403          # pacote existe mas está PRIVADO
+  export DUBLE_REGISTRY=403      # pacote existe mas está PRIVADO
   saida="$(rodar install.sh --yes)"
-  unset DUBLE_GHCR
+  unset DUBLE_REGISTRY
 
   if ! printf '%s' "$saida" | grep -q "construídas neste servidor"; then
     printf '  ✗ com as imagens inalcançáveis, o instalador não avisou que ia construir aqui\n'

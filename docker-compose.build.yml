@@ -3,7 +3,7 @@
 #   docker compose -f docker-compose.prod.yml -f docker-compose.build.yml build
 #   docker compose -f docker-compose.prod.yml up -d
 #
-# O caminho normal (leigo) NÃO usa este arquivo — puxa a imagem pronta do GHCR.
+# O caminho normal (leigo) NÃO usa este arquivo — puxa a imagem pronta do Docker Hub.
 
 services:
   app:

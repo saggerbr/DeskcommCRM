@@ -49,8 +49,8 @@ RUN pnpm build
 FROM node:22-alpine AS runner
 WORKDIR /app
 
-# Procedência (doutrina de packaging, invariante 2). O CI já injeta os labels
-# OCI via docker/metadata-action; estes aqui são defesa em profundidade — valem
+# Procedência (doutrina de packaging, invariante 2). O CI injeta os labels
+# OCI pelo scripts/publicar-imagem-docker.sh; estes aqui são defesa em profundidade — valem
 # para qualquer build, inclusive o local de docker-compose.build.yml, que não
 # passa pelo metadata-action e sem isto sairia sem origem nenhuma.
 LABEL org.opencontainers.image.source="https://github.com/melgarafael/DeskcommCRM" \

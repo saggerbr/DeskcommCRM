@@ -213,7 +213,7 @@ pro login) e não 404. Verificações e o caso de build local em
 `docs/runbooks/deploy.md`.
 
 O caminho normal **não constrói nada na VPS**: commit → push → PR → merge na
-`main` → o CI publica no GHCR → a VPS puxa. Imagem construída na VPS é exceção
+`main` → o CI publica no Docker Hub → a VPS puxa. Imagem construída na VPS é exceção
 de emergência e é dívida: existe só naquele disco e qualquer `up -d` sem
 `APP_PULL_POLICY=never` a substitui em silêncio.
 

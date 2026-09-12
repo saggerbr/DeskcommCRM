@@ -211,7 +211,7 @@ check "a chave APP_IMAGE não duplicou" test "$(grep -c '^APP_IMAGE=' .env)" -eq
 run_update --to v1.1.0 --force
 check "segunda execução também não duplica" test "$(grep -c '^APP_IMAGE=' .env)" -eq 1
 check "as outras chaves do .env sobreviveram" grep -q '^INTERNAL_SECRET=segredo$' .env
-check "a política de pull vira 'missing' — a tag é imutável, e 'always' derrubaria o CRM se o GHCR caísse" \
+check "a política de pull vira 'missing' — a tag é imutável, e 'always' derrubaria o CRM se o registry caísse" \
   grep -q '^APP_PULL_POLICY=missing$' .env
 check "e sem duplicar a chave" test "$(grep -c '^APP_PULL_POLICY=' .env)" -eq 1
 check ".env continua 600 (só o dono lê)" test -n "$(find .env -perm 600)"

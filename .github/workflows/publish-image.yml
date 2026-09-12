@@ -1,4 +1,4 @@
-name: Publicar imagem Docker (GHCR)
+name: Publicar imagens Docker (Docker Hub + GHCR de transição)
 
 # Builda as imagens GENÉRICAS que o self-hoster instala e publica no GitHub
 # Container Registry. O leigo puxa no VPS (não builda lá). Roda nos runners do
@@ -48,6 +48,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  DOCKERHUB_NAMESPACE: somamais
 
 jobs:
   # Nenhuma tag publica sem estar CONTIDA na `main`.
@@ -129,6 +130,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       # A versão que a imagem vai reportar em /api/v1/health. Numa tag v1.2.3 é
       # "1.2.3"; fora de tag, o SHA curto — que ainda responde "o que está
       # rodando aqui?", que é a pergunta que o campo existe para responder.
@@ -141,70 +150,36 @@ jobs:
             echo "value=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Docker metadata (tags/labels)
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            # `enable={{is_default_branch}}` NÃO basta: o metadata-action o
-            # considera verdadeiro também num push de TAG, então toda release
-            # movia `latest` junto. Isso apagava a distinção que a doutrina
-            # inteira depende — `latest` = topo da main, `stable` = última
-            # release — e fazia `latest` oscilar entre os dois.
-            type=raw,value=latest,enable=${{ github.ref_type == 'branch' && github.ref_name == 'main' }}
-            # `stable` NÃO sai daqui, e a razão é a issue #488. Ele já saiu: era
-            # mais um `type=raw` nesta lista, e por isso CADA imagem movia o
-            # canal sozinha, ao terminar, sem saber se as irmãs conseguiram.
-            # Medido no corte da v1.12.0 — o job do app morreu em `Set up
-            # Buildx`, antes de compilar coisa alguma, enquanto worker e
-            # scheduler seguiram e moveram o ponteiro:
-            #
-            #   deskcommcrm          1.12.0   404
-            #   deskcommcrm          stable   sha256:0235d02b…  ← 1.11.0
-            #   deskcomm-worker      stable   sha256:66c7bde4…  ← 1.12.0
-            #   deskcomm-scheduler   stable   sha256:ac6b87cc…  ← 1.12.0
-            #
-            # Quem instalasse por `stable` naquela janela recebia app 1.11.0 com
-            # worker e scheduler 1.12.0. `fail-fast: true` não resolveria: quando
-            # o app falhou, as irmãs JÁ tinham publicado e JÁ tinham movido o
-            # canal — abortá-las não desfaz o que foi publicado.
-            #
-            # Publicar por NÚMERO é o que continua aqui, e é seguro: `1.12.0`
-            # pode existir para uma imagem e não para outra sem prejuízo, porque
-            # ninguém instala por um número que o instalador não escreveu. Mover
-            # o CANAL é ato do job `promover-stable`, lá embaixo, quando o
-            # conjunto está completo.
-          labels: |
-            org.opencontainers.image.title=${{ matrix.title }}
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build e push (imagem genérica — sem segredos)
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          # linux/amd64: o VPS HostGator e a imagem do WAHA são amd64.
-          platforms: linux/amd64
-          # PR de fork não tem permissão de escrita no GHCR, e publicar imagem
-          # de código não revisado seria pior que não gatear. Em PR: constrói
-          # (que é o gate) e descarta.
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            APP_VERSION=${{ steps.ver.outputs.value }}
-          # Cache por imagem: as três têm camadas diferentes e um escopo único
-          # faria uma sobrescrever o cache da outra a cada run.
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
-          # Sem build-args de segredo: a imagem é genérica (NEXT_PUBLIC_* viram
-          # placeholder; valores reais entram em runtime no VPS do usuário).
+      - name: Build e push versionado (imagem genérica — sem segredos)
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.value }}
+          IMAGEM: ${{ matrix.name }}
+          TITULO: ${{ matrix.title }}
+        run: |
+          set -euo pipefail
+          args=(
+            --image "$IMAGEM"
+            --version "$APP_VERSION"
+            --repository "${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}"
+            --repository "docker.io/${DOCKERHUB_NAMESPACE}"
+            --label "org.opencontainers.image.title=$TITULO"
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}"
+            --label "org.opencontainers.image.version=$APP_VERSION"
+          )
+
+          # O número sai sempre. `main` e `latest` são canais de desenvolvimento;
+          # `stable` só é promovido depois que as três imagens ficaram prontas.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            args+=(--tag "${APP_VERSION%.*}")
+          elif [ "${GITHUB_REF_NAME}" = "main" ]; then
+            args+=(--tag main --tag latest)
+          fi
+          if [ "${GITHUB_EVENT_NAME}" != "pull_request" ]; then args+=(--publish); fi
+          bash scripts/publicar-imagem-docker.sh "${args[@]}"
 
   # A imagem do app CONSTRÓI e MORRE ao subir? Este job existe porque isso
   # aconteceu: `next@16.3.1` passou a resolver `@swc/helpers` por ESM, o file
@@ -340,6 +315,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Apontar `stable` para esta versão, nas três imagens
         env:
           VERSAO: ${{ github.ref_name }}
@@ -353,9 +335,14 @@ jobs:
           numero="${VERSAO#v}"
           for img in deskcommcrm deskcomm-worker deskcomm-scheduler; do
             echo "::group::${img}"
-            docker buildx imagetools create \
-              --tag "${REGISTRY}/${dono}/${img}:stable" \
-              "${REGISTRY}/${dono}/${img}:${numero}"
+            # Docker Hub é o destino atual. O GHCR fica nesta publicação de
+            # transição para que um `update.sh` antigo (ainda com o namespace
+            # anterior carregado na memória) consiga concluir a atualização.
+            for repo in "${REGISTRY}/${dono}" "docker.io/${DOCKERHUB_NAMESPACE}"; do
+              docker buildx imagetools create \
+                --tag "${repo}/${img}:stable" \
+                "${repo}/${img}:${numero}"
+            done
             echo "::endgroup::"
           done
           echo "stable agora aponta para ${numero} nas três imagens"
